@@ -216,7 +216,7 @@ if auth.is_authenticated():
         
         # Load data
         try:
-            df_hasil = pd.read_csv("hasil_labeling_stemming (deploy).csv")
+            df_hasil = pd.read_csv("hasil_labeling_stemming(deploy).csv")
             
             # Tampilkan statistik
             col1, col2, col3, col4 = st.columns(4)
