@@ -333,7 +333,7 @@ if auth.is_authenticated():
         
         # Load data
         try:
-            df_hasil = pd.read_csv("hasil_labeling_stemming (3).csv")
+            df_hasil = pd.read_csv("hasil_labeling_stemming (4).csv")
             
             # Pilihan sentimen
             sentimen_option = st.selectbox(
