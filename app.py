@@ -187,7 +187,7 @@ with st.sidebar:
         # Menu navigasi
         page = st.radio(
             "Pilih Halaman:",
-            ["Dashboard", "Analisis Sentimen", "Prediksi Sentimen", "Lexicon & WordCloud", "Import & Prediksi"]
+            ["Dashboard", "Lexicon & WordCloud", "Import & Prediksi"]
         )
         
         if st.button("Logout"):
@@ -249,11 +249,7 @@ if auth.is_authenticated():
             
         except Exception as e:
             st.error(f"Error loading data: {e}")
-    
-    elif page == "Analisis Sentimen":
-        st.title("Analisis Sentimen")
-        
-        # Load data
+                # Load data
         try:
             df_hasil = pd.read_csv("hasil_labeling_stemming (4).csv")
             
@@ -275,55 +271,10 @@ if auth.is_authenticated():
                 use_container_width=True
             )
             
-            # Word Cloud
-            st.subheader("Word Cloud")
-            
-            sentimen_wc = st.selectbox(
-                "Pilih sentimen untuk word cloud:",
-                options=["Semua", "positif", "netral", "negatif"]
-            )
-            
-            if sentimen_wc == "Semua":
-                text = " ".join(df_hasil['Stemming'].dropna())
-            else:
-                text = " ".join(df_hasil[df_hasil['label'] == sentimen_wc]['Stemming'].dropna())
-            
-            if text:
-                wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
-                
-                fig, ax = plt.subplots(figsize=(10, 5))
-                ax.imshow(wordcloud, interpolation='bilinear')
-                ax.axis('off')
-                st.pyplot(fig)
-            else:
-                st.info("Tidak ada data untuk ditampilkan")
-            
         except Exception as e:
             st.error(f"Error loading data: {e}")
     
-    elif page == "Prediksi Sentimen":
-        st.title("Prediksi Sentimen")
-        
-        # Load model IndoBERT
-        model, tokenizer = load_model()
 
-        # Form input teks
-        user_input = st.text_area("Masukkan teks ulasan:", height=150)
-        
-        if st.button("Prediksi Sentimen"):
-            if user_input:
-                with st.spinner("Memproses..."):
-                    sentiment, confidence = predict_sentiment(user_input, model, tokenizer)
-                    
-                    # Tampilkan hasil
-                    if sentiment == "positif":
-                        st.success(f"Sentimen: {sentiment} (Confidence: {confidence:.2f})")
-                    elif sentiment == "netral":
-                        st.info(f"Sentimen: {sentiment} (Confidence: {confidence:.2f})")
-                    else:
-                        st.error(f"Sentimen: {sentiment} (Confidence: {confidence:.2f})")
-            else:
-                st.warning("Silakan masukkan teks terlebih dahulu")
     
     elif page == "Lexicon & WordCloud":
         st.title("Lexicon & WordCloud")
