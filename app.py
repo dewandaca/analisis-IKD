@@ -14,6 +14,8 @@ from nltk.corpus import stopwords
 import io
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 import numpy as np
+from google_play_scraper import reviews, Sort
+import zipfile
 
 # Download stopwords (kalau belum)
 try:
@@ -375,21 +377,6 @@ if auth.is_authenticated():
                     else:
                         st.info("Tidak ada data lexicon untuk ditampilkan")
                 
-                # Tambahkan fitur download data
-                st.subheader("Download Data")
-                
-                # Fungsi untuk mengkonversi dataframe ke CSV
-                def convert_df_to_csv(df):
-                    return df.to_csv(index=False).encode('utf-8')
-                
-                # Tombol download
-                st.download_button(
-                    label="Download Data Lexicon",
-                    data=convert_df_to_csv(lexicon_df),
-                    file_name=f"lexicon_{sentimen_option}.csv",
-                    mime="text/csv",
-                    help="Klik untuk mengunduh data lexicon dalam format CSV"
-                )
             
         except Exception as e:
             st.error(f"Error loading data: {e}")
@@ -398,111 +385,226 @@ if auth.is_authenticated():
     elif page == "Import & Prediksi":
         st.title("Import & Prediksi Komentar")
         
+        # Inisialisasi result_df di awal
+        result_df = None
+        
         # Inisialisasi preprocessing
         stop_words, stemmer, slang_dict = initialize_preprocessing()
         
         # Load model
         model, tokenizer = load_model()
         
-        # Upload file CSV
-        uploaded_file = st.file_uploader("Unggah file CSV komentar", type=["csv"])
+        # Tambahkan tab untuk memilih metode input
+        input_tab1, input_tab2, input_tab3 = st.tabs(["Scraping Play Store", "Upload File", "Input Manual"])
         
-        # Contoh format
-        st.info("""
-        Format CSV yang diharapkan:
-        - Harus memiliki kolom 'content' yang berisi teks komentar
-        - Kolom lain opsional (misalnya: 'userName', 'at', dll)
+        # Tab Scraping Play Store
+        with input_tab1:
+            st.subheader("Scraping Ulasan dari Play Store")
+            
+            # Input ID aplikasi
+            app_id = st.text_input(
+                "Masukkan ID Aplikasi Play Store:",
+                value=" ",
+                help="Contoh: gov.dukcapil.mobile_id untuk aplikasi IKD"
+            )
+            
+            # Input jumlah ulasan
+            review_count = st.number_input(
+                "Jumlah ulasan yang akan diambil:",
+                min_value=10,
+                max_value=100,
+                value=100,
+                step=10,
+                help="Maksimal 100 ulasan untuk menghindari waktu proses yang terlalu lama"
+            )
+            
+            # Pilihan sort
+            sort_option = st.selectbox(
+                "Urutkan berdasarkan:",
+                options=["Paling Relevan", "Terbaru"],
+                index=0
+            )
+            
+            # Mapping sort option ke Sort enum
+            sort_mapping = {
+                "Paling Relevan": Sort.MOST_RELEVANT,
+                "Terbaru": Sort.NEWEST,
+            }
+            
+            # Tombol untuk scraping
+            scrape_button = st.button("Scraping Ulasan")
+            
+            # Proses scraping jika tombol ditekan
+            if scrape_button and app_id:
+                try:
+                    with st.spinner(f"Mengambil {review_count} ulasan dari Play Store..."):
+                        # Lakukan scraping
+                        result, _ = reviews(
+                            app_id,
+                            lang='id',
+                            country='id',
+                            count=review_count,
+                            sort=sort_mapping[sort_option]
+                        )
+                        
+                        # Cek apakah hasil scraping kosong
+                        if not result:
+                            st.error("Tidak ada ulasan yang ditemukan untuk aplikasi ini.")
+                        else:
+                            # Konversi ke DataFrame
+                            df = pd.DataFrame(result)
+                            
+                            # Debug: tampilkan kolom yang tersedia
+                            st.write("Kolom yang tersedia:", df.columns.tolist())
+                            
+                            # Pastikan kolom yang diperlukan ada
+                            required_columns = ['content', 'userName', 'score', 'at']
+                            missing_columns = [col for col in required_columns if col not in df.columns]
+                            
+                            if missing_columns:
+                                st.error(f"Kolom yang diperlukan tidak ditemukan: {', '.join(missing_columns)}")
+                                st.write("Struktur data yang diterima:")
+                                st.write(df.head(1))
+                            else:
+                                # Rename kolom untuk menyesuaikan dengan format yang diharapkan
+                                df = df.rename(columns={
+                                    'content': 'content',
+                                    'userName': 'userName',
+                                    'at': 'at',
+                                    'score': 'rating'
+                                })
+                                
+                                # Bersihkan dataframe
+                                df = clean_dataframe(df)
+                                
+                                if not df.empty:
+                                    # Proses dataframe dengan preprocessing
+                                    processed_df = process_dataframe(df, stop_words, stemmer, slang_dict)
+                                    
+                                    if processed_df is not None:
+                                        # Prediksi sentimen
+                                        result_df = predict_batch(processed_df, model, tokenizer)
+                                        
+                                        # Simpan ke session state untuk digunakan nanti
+                                        st.session_state.result_df = result_df
+                                        
+                                        # Tampilkan hasil
+                                        st.success(f"Berhasil memproses {len(result_df)} ulasan dari Play Store")
+                except Exception as e:
+                    st.error(f"Error saat scraping Play Store: {str(e)}")
+                    st.write("Detail error:", type(e).__name__)
+                    
+                    # Tambahkan saran untuk mengatasi masalah
+                    st.info("""
+                    **Saran untuk mengatasi masalah:**
+                    1. Pastikan ID aplikasi benar (contoh: gov.dukcapil.mobile_id untuk aplikasi IKD)
+                    2. Coba kurangi jumlah ulasan yang diambil
+                    3. Coba gunakan metode input lain (Upload File atau Input Manual)
+                    """)
         
-        Contoh:
-        ```
-        content,userName,at
-        "Aplikasi ini bagus sekali",User1,2023-01-01
-        "Saya tidak suka dengan aplikasi ini",User2,2023-01-02
-        ```
-        """)
+        # Tab Upload CSV
+        with input_tab2:
+            # Upload file CSV
+            uploaded_file = st.file_uploader("Unggah file CSV atau Excel komentar", type=["csv", "xlsx", "xls"])
+            
+            # Contoh format
+            st.info("""
+            Format file yang diharapkan:
+            - Harus memiliki kolom 'content' yang berisi teks komentar
+            - Kolom lain opsional (misalnya: 'userName', 'at', dll)
+            
+            Contoh:
+            ```
+            content,userName,at
+            "Aplikasi ini bagus sekali",User1,2023-01-01
+            "Saya tidak suka dengan aplikasi ini",User2,2023-01-02
+            ```
+            """)
+            
+            # Tombol proses
+            process_upload = st.button("Proses File", disabled=uploaded_file is None)
+            
+            # Proses data dari file CSV atau Excel
+            if process_upload and uploaded_file is not None:
+                try:
+                    # Cek ekstensi file
+                    file_extension = uploaded_file.name.split('.')[-1].lower()
+                    
+                    # Baca file sesuai ekstensi
+                    if file_extension in ['xlsx', 'xls']:
+                        df = pd.read_excel(uploaded_file)
+                    else:  # CSV
+                        df = pd.read_csv(uploaded_file)
+                    
+                    # Pastikan ada kolom 'content'
+                    if 'content' not in df.columns:
+                        st.error("Data harus memiliki kolom 'content' yang berisi teks komentar")
+                    else:
+                        # Bersihkan dataframe
+                        df = clean_dataframe(df)
+                        
+                        # Batasi jumlah komentar menjadi 100
+                        if len(df) > 100:
+                            df = df.head(100)
+                            st.warning("Data dibatasi hingga 100 komentar pertama")
+                        
+                        if not df.empty:
+                            # Proses dataframe dengan preprocessing
+                            processed_df = process_dataframe(df, stop_words, stemmer, slang_dict)
+                            
+                            if processed_df is not None:
+                                # Prediksi sentimen
+                                with st.spinner("Memproses data..."):
+                                    result_df = predict_batch(processed_df, model, tokenizer)
+                                    
+                                    # Simpan ke session state untuk digunakan nanti
+                                    st.session_state.result_df = result_df
+                                    
+                                    # Tampilkan hasil
+                                    st.success(f"Berhasil memproses {len(result_df)} komentar")
+                except Exception as e:
+                    st.error(f"Error saat memproses file: {e}")
         
-        # Atau input manual
-        st.subheader("Atau masukkan komentar secara manual")
-        
-        manual_input = st.text_area(
-            "Masukkan komentar (satu komentar per baris, maksimal 100 komentar):",
-            height=200
-        )
-        
-        # Tombol proses
-        col1, col2 = st.columns(2)
-        with col1:
-            process_upload = st.button("Proses File CSV", disabled=uploaded_file is None)
-        with col2:
+        # Tab Input Manual
+        with input_tab3:
+            # Input manual
+            manual_input = st.text_area(
+                "Masukkan komentar (satu komentar per baris, maksimal 100 komentar):",
+                height=200
+            )
+            
+            # Tombol proses
             process_manual = st.button("Proses Komentar Manual", disabled=not manual_input)
-        
-        # Variabel untuk menyimpan dataframe hasil
-        result_df = None
-        
-        # Proses data dari file CSV
-        if process_upload and uploaded_file is not None:
-            try:
-                # Baca file CSV
-                df = pd.read_csv(uploaded_file)
-                
-                # Pastikan ada kolom 'content'
-                if 'content' not in df.columns:
-                    st.error("Data harus memiliki kolom 'content' yang berisi teks komentar")
-                else:
-                    # Bersihkan dataframe
-                    df = clean_dataframe(df)
+            
+            # Proses data dari input manual
+            if process_manual and manual_input:
+                try:
+                    # Buat dataframe dari input manual
+                    lines = [line.strip() for line in manual_input.split('\n') if line.strip()]
                     
                     # Batasi jumlah komentar menjadi 100
-                    if len(df) > 100:
-                        df = df.head(100)
+                    if len(lines) > 100:
+                        lines = lines[:100]
                         st.warning("Data dibatasi hingga 100 komentar pertama")
                     
-                    if not df.empty:
-                        # Proses dataframe dengan preprocessing
-                        processed_df = process_dataframe(df, stop_words, stemmer, slang_dict)
-                        
-                        if processed_df is not None:
-                            # Prediksi sentimen
-                            with st.spinner("Memproses data..."):
-                                result_df = predict_batch(processed_df, model, tokenizer)
-                                
-                                # Simpan ke session state untuk digunakan nanti
-                                st.session_state.result_df = result_df
-                                
-                                # Tampilkan hasil
-                                st.success(f"Berhasil memproses {len(result_df)} komentar")
-            except Exception as e:
-                st.error(f"Error saat memproses file: {e}")
-        
-        # Proses data dari input manual
-        elif process_manual and manual_input:
-            try:
-                # Buat dataframe dari input manual
-                lines = [line.strip() for line in manual_input.split('\n') if line.strip()]
-                
-                # Batasi jumlah komentar menjadi 100
-                if len(lines) > 100:
-                    lines = lines[:100]
-                    st.warning("Data dibatasi hingga 100 komentar pertama")
-                
-                # Buat dataframe
-                df = pd.DataFrame({"content": lines})
-                
-                # Proses dataframe dengan preprocessing
-                processed_df = process_dataframe(df, stop_words, stemmer, slang_dict)
-                
-                if processed_df is not None:
-                    # Prediksi sentimen
-                    with st.spinner("Memproses data..."):
-                        result_df = predict_batch(processed_df, model, tokenizer)
-                        
-                        # Simpan ke session state untuk digunakan nanti
-                        st.session_state.result_df = result_df
-                        
-                        # Tampilkan hasil
-                        st.success(f"Berhasil memproses {len(result_df)} komentar")
-            except Exception as e:
-                st.error(f"Error saat memproses input manual: {e}")
+                    # Buat dataframe
+                    df = pd.DataFrame({"content": lines})
+                    
+                    # Proses dataframe dengan preprocessing
+                    processed_df = process_dataframe(df, stop_words, stemmer, slang_dict)
+                    
+                    if processed_df is not None:
+                        # Prediksi sentimen
+                        with st.spinner("Memproses data..."):
+                            result_df = predict_batch(processed_df, model, tokenizer)
+                            
+                            # Simpan ke session state untuk digunakan nanti
+                            st.session_state.result_df = result_df
+                            
+                            # Tampilkan hasil
+                            st.success(f"Berhasil memproses {len(result_df)} komentar")
+                except Exception as e:
+                    st.error(f"Error saat memproses input manual: {e}")
         
         # Gunakan result_df dari session state jika ada
         if 'result_df' in st.session_state and st.session_state.result_df is not None:
@@ -551,123 +653,260 @@ if auth.is_authenticated():
             # Tampilkan dataframe
             st.dataframe(result_df, use_container_width=True)
             
-            # Tambahkan fitur download data
+            # Download Section
             st.subheader("Download Data Hasil Prediksi")
             
-            # Pilihan format download
-            download_format = st.radio(
-                "Pilih format download:",
-                ["CSV (semua kolom)", "CSV (kolom utama saja)"]
-            )
+            # Cek apakah data hasil prediksi kosong
+            is_data_empty = result_df is None or result_df.empty
             
-            # Fungsi untuk mengkonversi dataframe ke CSV
-            def convert_df_to_csv(df, include_all_columns=True):
-                # Jika tidak semua kolom, hanya sertakan kolom utama
-                if not include_all_columns:
-                    df = df[['content', 'predicted_label', 'confidence']]
+            # Cek apakah data Stemming kosong (semua baris kosong setelah preprocessing)
+            has_stemming_data = False
+            if not is_data_empty and 'Stemming' in result_df.columns:
+                has_stemming_data = not result_df['Stemming'].dropna().empty
+            
+            # Tampilkan peringatan jika data kosong
+            if is_data_empty:
+                st.warning("Tidak ada data hasil prediksi yang dapat diunduh. Silakan proses data terlebih dahulu.")
+            elif not has_stemming_data:
+                st.warning("Data hasil preprocessing kosong. Semua teks telah dihapus selama proses pembersihan.")
+            
+            # Hanya tampilkan opsi download jika ada data
+            if not is_data_empty:
+                # Fungsi untuk mengkonversi dataframe ke CSV
+                def convert_df_to_csv(df, include_all_columns=True):
+                    if not include_all_columns:
+                        df = df[['content', 'predicted_label', 'confidence']]
+                    return df.to_csv(index=False).encode('utf-8')
                 
-                return df.to_csv(index=False).encode('utf-8')
-            
-            # Siapkan file untuk didownload
-            if download_format == "CSV (semua kolom)":
-                csv_data = convert_df_to_csv(result_df, include_all_columns=True)
-                file_name = "hasil_prediksi_lengkap.csv"
-            else:
-                csv_data = convert_df_to_csv(result_df, include_all_columns=False)
-                file_name = "hasil_prediksi_ringkas.csv"
-            
-            # Tombol download
-            st.download_button(
-                label="Download Data",
-                data=csv_data,
-                file_name=file_name,
-                mime="text/csv",
-                help="Klik untuk mengunduh data hasil prediksi dalam format CSV"
-            )
-            
-            # Tambahkan WordCloud
-            st.subheader("Word Cloud")
-            
-            # Pilihan sentimen untuk word cloud
-            sentimen_wc = st.selectbox(
-                "Pilih sentimen untuk word cloud:",
-                options=["Semua", "positif", "netral", "negatif"]
-            )
-            
-            # Filter data berdasarkan sentimen
-            if sentimen_wc == "Semua":
-                wc_text = " ".join(result_df['Stemming'].dropna())
-            else:
-                wc_text = " ".join(result_df[result_df['predicted_label'] == sentimen_wc]['Stemming'].dropna())
-            
-            # Buat word cloud jika ada data
-            if wc_text:
-                wordcloud = WordCloud(width=800, height=400, background_color='white').generate(wc_text)
+                # Fungsi untuk menyimpan gambar sebagai bytes
+                def fig_to_bytes(fig):
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', dpi=300)
+                    buf.seek(0)
+                    return buf.getvalue()
                 
-                fig, ax = plt.subplots(figsize=(10, 5))
-                ax.imshow(wordcloud, interpolation='bilinear')
-                ax.axis('off')
-                st.pyplot(fig)
-            else:
-                st.info("Tidak ada data untuk ditampilkan dalam word cloud")
+                # Opsi download dalam kolom
+                col1, col2 = st.columns(2)
                 
-            # Tambahkan Lexicon (frekuensi kata) - Top 20 Word
-            with st.expander("Lihat Top 20 Kata", expanded=True):
-                st.subheader("Top 20 Kata Berdasarkan Frekuensi")
-                
-                # Filter data berdasarkan sentimen
-                if sentimen_wc == "Semua":
-                    filtered_df = result_df
-                else:
-                    filtered_df = result_df[result_df['predicted_label'] == sentimen_wc]
-                
-                if 'Stemming' in filtered_df.columns and not filtered_df.empty:
-                    # Gabungkan semua kata
-                    all_words = " ".join(filtered_df['Stemming'].dropna().astype(str)).split()
+                with col1:
+                    st.write("**Pilih data yang ingin diunduh:**")
+                    download_csv = st.checkbox("📊 Data CSV Hasil Prediksi", value=True)
+                    download_dist_chart = st.checkbox("📈 Grafik Distribusi Sentimen", value=True)
                     
-                    # Hitung frekuensi kata
-                    word_counts = Counter(all_words)
+                    # Pilihan format CSV jika opsi CSV dipilih
+                    if download_csv:
+                        csv_format = st.radio(
+                            "Format CSV:",
+                            ["Semua kolom", "Kolom utama saja"],
+                            help="Kolom utama: content, predicted_label, confidence"
+                        )
+                        include_all_columns = csv_format == "Semua kolom"
+                
+                with col2:
+                    st.write("**Pilih visualisasi yang ingin diunduh:**")
+                    # Hanya aktifkan opsi wordcloud dan lexicon jika ada data stemming
+                    download_wordcloud = st.checkbox("☁️ Word Cloud", value=True, disabled=not has_stemming_data)
+                    download_lexicon = st.checkbox("📝 Data Top 20 Kata", value=True, disabled=not has_stemming_data)
+                    download_lexicon_chart = st.checkbox("📊 Grafik Top 20 Kata", value=True, disabled=not has_stemming_data)
                     
-                    # Konversi ke DataFrame
-                    lexicon_df = pd.DataFrame(word_counts.most_common(50), columns=['Kata', 'Frekuensi'])
-                    
-                    # Tampilkan tabel
-                    st.dataframe(lexicon_df.head(20), use_container_width=True)
-                    
-                    # Visualisasi frekuensi kata (top 20)
-                    if not lexicon_df.empty:
-                        # Ambil top words sesuai jumlah yang tersedia (maksimal 20)
-                        top_words = lexicon_df.head(min(20, len(lexicon_df)))
-                        n_words = len(top_words)
-                        
-                        fig, ax = plt.subplots(figsize=(12, 8))
-                        bars = ax.barh(top_words['Kata'][::-1], top_words['Frekuensi'][::-1], color='skyblue')
-                        ax.set_xlabel('Frekuensi')
-                        ax.set_ylabel('Kata')
-                        ax.set_title(f'Top {n_words} Kata - {sentimen_wc}')
-                        
-                        # Tambahkan label frekuensi
-                        for i, bar in enumerate(bars):
-                            ax.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height()/2, 
-                                    str(top_words['Frekuensi'].iloc[n_words-1-i]),
-                                    va='center')
-                        
-                        plt.tight_layout()
-                        st.pyplot(fig)
+                    # Tampilkan pesan jika opsi dinonaktifkan
+                    if not has_stemming_data:
+                        st.info("Visualisasi wordcloud dan lexicon tidak tersedia karena data hasil preprocessing kosong.")
+                
+                # Tombol download utama
+                download_button = st.button("🗂️ Download Hasil Analisis (ZIP)", 
+                                          type="primary", 
+                                          use_container_width=True,
+                                          disabled=is_data_empty)
+                
+                if download_button:
+                    if not any([download_csv, download_dist_chart, 
+                               (download_wordcloud and has_stemming_data), 
+                               (download_lexicon and has_stemming_data), 
+                               (download_lexicon_chart and has_stemming_data)]):
+                        st.warning("Pilih minimal satu item untuk diunduh!")
                     else:
-                        st.info("Tidak ada data frekuensi kata untuk ditampilkan")
-                else:
-                    st.info("Tidak ada data untuk ditampilkan")
+                        try:
+                            # Siapkan ZIP file untuk menampung semua file
+                            zip_buffer = io.BytesIO()
+                            
+                            with st.spinner("Menyiapkan file untuk diunduh..."):
+                                # Gunakan zipfile untuk membuat file ZIP
+                                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                                    
+                                    # 1. Tambahkan CSV jika dipilih
+                                    if download_csv:
+                                        csv_data = convert_df_to_csv(result_df, include_all_columns)
+                                        file_name = "hasil_prediksi_lengkap.csv" if include_all_columns else "hasil_prediksi_ringkas.csv"
+                                        zip_file.writestr(file_name, csv_data)
+                                    
+                                    # 2. Tambahkan grafik distribusi jika dipilih
+                                    if download_dist_chart:
+                                        dist_fig, dist_ax = plt.subplots(figsize=(10, 6))
+                                        colors = {'positif': 'green', 'netral': 'gray', 'negatif': 'red'}
+                                        sentimen_counts.plot(kind='bar', color=[colors.get(x, 'blue') for x in sentimen_counts.index], ax=dist_ax)
+                                        dist_ax.set_xlabel('Sentimen')
+                                        dist_ax.set_ylabel('Jumlah Komentar')
+                                        dist_ax.set_title('Distribusi Sentimen')
+                                        plt.xticks(rotation=0)
+                                        
+                                        dist_img = fig_to_bytes(dist_fig)
+                                        zip_file.writestr("distribusi_sentimen.png", dist_img)
+                                        plt.close(dist_fig)
+                                    
+                                    # 3. Tambahkan wordcloud jika dipilih dan ada data stemming
+                                    if download_wordcloud and has_stemming_data:
+                                        # Buat wordcloud untuk setiap sentimen
+                                        sentimen_options = ["Semua", "positif", "netral", "negatif"]
+                                        
+                                        for sentimen in sentimen_options:
+                                            # Filter data berdasarkan sentimen
+                                            if sentimen == "Semua":
+                                                text_data = " ".join(result_df['Stemming'].dropna().astype(str))
+                                            else:
+                                                filtered_df = result_df[result_df['predicted_label'] == sentimen]
+                                                if filtered_df.empty or filtered_df['Stemming'].dropna().empty:
+                                                    continue  # Skip jika tidak ada data untuk sentimen ini
+                                                text_data = " ".join(filtered_df['Stemming'].dropna().astype(str))
+                                            
+                                            if text_data.strip():
+                                                try:
+                                                    wordcloud_obj = WordCloud(
+                                                        width=800, 
+                                                        height=400, 
+                                                        background_color='white',
+                                                        max_words=100,
+                                                        collocations=False
+                                                    ).generate(text_data)
+                                                    
+                                                    wc_fig, wc_ax = plt.subplots(figsize=(10, 5))
+                                                    wc_ax.imshow(wordcloud_obj, interpolation='bilinear')
+                                                    wc_ax.axis('off')
+                                                    wc_ax.set_title(f'Word Cloud - {sentimen}', fontsize=16, pad=20)
+                                                    
+                                                    wc_img = fig_to_bytes(wc_fig)
+                                                    zip_file.writestr(f"wordcloud_{sentimen.lower()}.png", wc_img)
+                                                    plt.close(wc_fig)
+                                                except Exception as e:
+                                                    st.warning(f"Gagal membuat wordcloud untuk {sentimen}: {e}")
+                                    
+                                    # 4. Tambahkan data lexicon jika dipilih dan ada data stemming
+                                    if download_lexicon and has_stemming_data:
+                                        # Buat lexicon untuk setiap sentimen
+                                        sentimen_options = ["Semua", "positif", "netral", "negatif"]
+                                        
+                                        for sentimen in sentimen_options:
+                                            # Filter data berdasarkan sentimen
+                                            if sentimen == "Semua":
+                                                filtered_data = result_df
+                                            else:
+                                                filtered_data = result_df[result_df['predicted_label'] == sentimen]
+                                            
+                                            if not filtered_data.empty and not filtered_data['Stemming'].dropna().empty:
+                                                # Gabungkan semua kata
+                                                all_words = " ".join(filtered_data['Stemming'].dropna().astype(str)).split()
+                                                
+                                                if all_words:
+                                                    # Hitung frekuensi kata
+                                                    word_counts = Counter(all_words)
+                                                    
+                                                    # Konversi ke DataFrame
+                                                    lexicon_data = pd.DataFrame(word_counts.most_common(20), columns=['Kata', 'Frekuensi'])
+                                                    
+                                                    # Simpan sebagai CSV
+                                                    lexicon_csv = lexicon_data.to_csv(index=False).encode('utf-8')
+                                                    zip_file.writestr(f"top20_kata_{sentimen.lower()}.csv", lexicon_csv)
+                                    
+                                    # 5. Tambahkan grafik lexicon jika dipilih dan ada data stemming
+                                    if download_lexicon_chart and has_stemming_data:
+                                        # Buat grafik lexicon untuk setiap sentimen
+                                        sentimen_options = ["Semua", "positif", "netral", "negatif"]
+                                        
+                                        for sentimen in sentimen_options:
+                                            # Filter data berdasarkan sentimen
+                                            if sentimen == "Semua":
+                                                filtered_data = result_df
+                                            else:
+                                                filtered_data = result_df[result_df['predicted_label'] == sentimen]
+                                            
+                                            if not filtered_data.empty and not filtered_data['Stemming'].dropna().empty:
+                                                # Gabungkan semua kata
+                                                all_words = " ".join(filtered_data['Stemming'].dropna().astype(str)).split()
+                                                
+                                                if all_words:
+                                                    # Hitung frekuensi kata
+                                                    word_counts = Counter(all_words)
+                                                    
+                                                    # Konversi ke DataFrame
+                                                    top_words = pd.DataFrame(word_counts.most_common(20), columns=['Kata', 'Frekuensi'])
+                                                    
+                                                    if not top_words.empty:
+                                                        # Buat grafik
+                                                        lex_fig, lex_ax = plt.subplots(figsize=(12, 8))
+                                                        bars = lex_ax.barh(top_words['Kata'][::-1], top_words['Frekuensi'][::-1], color='skyblue')
+                                                        lex_ax.set_xlabel('Frekuensi')
+                                                        lex_ax.set_ylabel('Kata')
+                                                        lex_ax.set_title(f'Top 20 Kata - {sentimen}')
+                                                        
+                                                        # Tambahkan label frekuensi
+                                                        for i, bar in enumerate(bars):
+                                                            lex_ax.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height()/2, 
+                                                                    str(top_words['Frekuensi'].iloc[min(19, len(top_words)-1)-i]),
+                                                                    va='center')
+                                                        
+                                                        plt.tight_layout()
+                                                        lex_img = fig_to_bytes(lex_fig)
+                                                        zip_file.writestr(f"grafik_top20_kata_{sentimen.lower()}.png", lex_img)
+                                                        plt.close(lex_fig)
+                            
+                            # Setel pointer ke awal buffer
+                            zip_buffer.seek(0)
+                            
+                            # Buat tombol download untuk file ZIP
+                            st.download_button(
+                                label="📥 Unduh File ZIP",
+                                data=zip_buffer,
+                                file_name=f"hasil_analisis_sentimen_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                mime="application/zip",
+                                help="Klik untuk mengunduh hasil analisis dalam format ZIP",
+                                use_container_width=True
+                            )
+                            
+                            st.success("✅ File ZIP berhasil disiapkan! Klik tombol 'Unduh File ZIP' di atas untuk mengunduh.")
+                            
+                            # Tampilkan ringkasan file yang akan diunduh
+                            items = []
+                            if download_csv:
+                                items.append(f"• Data CSV ({'semua kolom' if include_all_columns else 'kolom utama'})")
+                            if download_dist_chart:
+                                items.append("• Grafik distribusi sentimen")
+                            if download_wordcloud and has_stemming_data:
+                                items.append("• Word cloud (semua sentimen)")
+                            if download_lexicon and has_stemming_data:
+                                items.append("• Data top 20 kata (semua sentimen)")
+                            if download_lexicon_chart and has_stemming_data:
+                                items.append("• Grafik top 20 kata (semua sentimen)")
+                            
+                            if items:
+                                st.info("**Ringkasan file yang akan diunduh:**\n" + "\n".join(items))
+                            
+                        except Exception as e:
+                            st.error(f"Error saat menyiapkan file download: {e}")
+            
+            # Buat kolom untuk tombol download visualisasi
+            col1, col2 = st.columns(2)
+            
+            # Simpan gambar distribusi sentimen
+            with col1:
+                # Buat ulang grafik distribusi sentimen untuk download
+                dist_fig, dist_ax = plt.subplots(figsize=(10, 6))
+                colors = {'positif': 'green', 'netral': 'gray', 'negatif': 'red'}
+                sentimen_counts.plot(kind='bar', color=[colors.get(x, 'blue') for x in sentimen_counts.index], ax=dist_ax)
+                dist_ax.set_xlabel('Sentimen')
+                dist_ax.set_ylabel('Jumlah Komentar')
+                dist_ax.set_title('Distribusi Sentimen')
                 
-                # Tambahkan tombol download untuk data lexicon
-                if 'lexicon_df' in locals() and not lexicon_df.empty:
-                    st.download_button(
-                        label="Download Data Top 20 Kata",
-                        data=convert_df_to_csv(lexicon_df.head(20), include_all_columns=True),
-                        file_name=f"top20_kata_{sentimen_wc}.csv",
-                        mime="text/csv",
-                        help="Klik untuk mengunduh data top 20 kata dalam format CSV"
-                    )
+                # Tombol download grafik distribusi
 
 else:
     st.title("📱 Analisis Sentimen Aplikasi Identitas Kependudukan")
