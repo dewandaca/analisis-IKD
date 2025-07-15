@@ -647,6 +647,115 @@ if auth.is_authenticated():
             ax.set_title('Distribusi Sentimen')
             st.pyplot(fig)
             
+            # Tampilkan WordCloud dan Lexicon jika ada data stemming
+            if 'Stemming' in result_df.columns and not result_df['Stemming'].dropna().empty:
+                # WordCloud Section
+                st.subheader("Word Cloud")
+                
+                # Pilihan sentimen untuk wordcloud
+                wordcloud_sentimen = st.selectbox(
+                    "Pilih sentimen untuk Word Cloud:",
+                    options=["Semua", "positif", "netral", "negatif"],
+                    key="wordcloud_sentimen"
+                )
+                
+                # Filter data berdasarkan sentimen
+                if wordcloud_sentimen == "Semua":
+                    filtered_df = result_df
+                else:
+                    filtered_df = result_df[result_df['predicted_label'] == wordcloud_sentimen]
+                
+                # Tampilkan WordCloud jika ada data
+                if not filtered_df.empty and not filtered_df['Stemming'].dropna().empty:
+                    text = " ".join(filtered_df['Stemming'].dropna().astype(str))
+                    
+                    if text.strip():
+                        try:
+                            # Buat wordcloud
+                            wordcloud = WordCloud(
+                                width=800, 
+                                height=400, 
+                                background_color='white',
+                                max_words=100,
+                                contour_width=3,
+                                contour_color='steelblue',
+                                collocations=False
+                            ).generate(text)
+                            
+                            # Tampilkan wordcloud
+                            fig, ax = plt.subplots(figsize=(10, 5))
+                            ax.imshow(wordcloud, interpolation='bilinear')
+                            ax.axis('off')
+                            ax.set_title(f'Word Cloud - {wordcloud_sentimen}', fontsize=16, pad=20)
+                            st.pyplot(fig)
+                        except Exception as e:
+                            st.error(f"Error saat membuat wordcloud: {e}")
+                    else:
+                        st.info(f"Tidak ada data untuk sentimen '{wordcloud_sentimen}' yang dapat ditampilkan")
+                else:
+                    st.info(f"Tidak ada data untuk sentimen '{wordcloud_sentimen}' yang dapat ditampilkan")
+                
+                # Lexicon Section
+                st.subheader("Lexicon (Frekuensi Kata)")
+                
+                # Pilihan sentimen untuk lexicon
+                lexicon_sentimen = st.selectbox(
+                    "Pilih sentimen untuk Lexicon:",
+                    options=["Semua", "positif", "netral", "negatif"],
+                    key="lexicon_sentimen"
+                )
+                
+                # Filter data berdasarkan sentimen
+                if lexicon_sentimen == "Semua":
+                    filtered_df = result_df
+                else:
+                    filtered_df = result_df[result_df['predicted_label'] == lexicon_sentimen]
+                
+                # Tampilkan Lexicon jika ada data
+                if not filtered_df.empty and not filtered_df['Stemming'].dropna().empty:
+                    # Gabungkan semua kata
+                    all_words = " ".join(filtered_df['Stemming'].dropna().astype(str)).split()
+                    
+                    if all_words:
+                        # Hitung frekuensi kata
+                        word_counts = Counter(all_words)
+                        
+                        # Konversi ke DataFrame
+                        lexicon_df = pd.DataFrame(word_counts.most_common(50), columns=['Kata', 'Frekuensi'])
+                        
+                        # Tampilkan tabel dalam expander
+                        with st.expander("Lihat Tabel Frekuensi Kata", expanded=True):
+                            st.dataframe(lexicon_df, use_container_width=True)
+                        
+                        # Visualisasi frekuensi kata (top 20)
+                        if not lexicon_df.empty:
+                            # Ambil top words sesuai jumlah yang tersedia (maksimal 20)
+                            top_words = lexicon_df.head(min(20, len(lexicon_df)))
+                            n_words = len(top_words)
+                            
+                            fig, ax = plt.subplots(figsize=(12, 8))
+                            bars = ax.barh(top_words['Kata'][::-1], top_words['Frekuensi'][::-1], color='skyblue')
+                            ax.set_xlabel('Frekuensi')
+                            ax.set_ylabel('Kata')
+                            ax.set_title(f'Top {n_words} Kata - {lexicon_sentimen}')
+                            
+                            # Tambahkan label frekuensi
+                            for i, bar in enumerate(bars):
+                                ax.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height()/2, 
+                                        str(top_words['Frekuensi'].iloc[n_words-1-i]),
+                                        va='center')
+                            
+                            plt.tight_layout()
+                            st.pyplot(fig)
+                        else:
+                            st.info("Tidak ada data frekuensi kata untuk ditampilkan")
+                    else:
+                        st.info(f"Tidak ada kata yang dapat dianalisis untuk sentimen '{lexicon_sentimen}'")
+                else:
+                    st.info(f"Tidak ada data untuk sentimen '{lexicon_sentimen}' yang dapat ditampilkan")
+            else:
+                st.info("Data hasil preprocessing kosong. WordCloud dan Lexicon tidak dapat ditampilkan.")
+            
             # Tampilkan data hasil prediksi
             st.subheader("Data Hasil Prediksi")
             
