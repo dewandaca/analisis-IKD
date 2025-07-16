@@ -505,7 +505,7 @@ if auth.is_authenticated():
         # Tab Upload CSV
         with input_tab2:
             # Upload file CSV
-            uploaded_file = st.file_uploader("Unggah file CSV atau Excel komentar", type=["csv", "xlsx", "xls"])
+            uploaded_file = st.file_uploader("Unggah file CSV atau Excel komentar (maksimal 100 komentar)", type=["csv", "xlsx", "xls"])
             
             # Contoh format
             st.info("""

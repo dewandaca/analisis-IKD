@@ -9,6 +9,4 @@ nltk
 Sastrawi
 numpy
 google-play-scraper
-openpyxl
 sqlalchemy
-
