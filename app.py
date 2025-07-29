@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,6 +14,7 @@ import io
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 import numpy as np
 from google_play_scraper import reviews, Sort
+import openpyxl
 import zipfile
 
 # Download stopwords (kalau belum)

@@ -4,9 +4,9 @@ matplotlib
 wordcloud
 transformers
 torch
-scikit-learn
 nltk
 Sastrawi
 numpy
 google-play-scraper
 sqlalchemy
+openpyxl
