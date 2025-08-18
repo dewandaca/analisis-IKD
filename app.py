@@ -28,6 +28,25 @@ st.set_page_config(page_title="Analisis Sentimen Aplikasi", layout="wide")
 # Inisialisasi autentikasi
 auth = Authenticator()
 
+# Fungsi untuk mengidentifikasi kategori masalah dari teks komentar
+def identify_issue_category(text):
+    text = text.lower()
+    
+    # Kata kunci untuk setiap kategori
+    login_keywords = ['login', 'masuk', 'daftar', 'registrasi', 'akun', 'password', 'kata sandi', 'username', 'email', 'verifikasi']
+    ui_keywords = ['tampilan', 'ui', 'interface', 'desain', 'layout', 'menu', 'tombol', 'button', 'warna', 'font', 'ukuran', 'tata letak']
+    bug_keywords = ['bug', 'error', 'crash', 'hang', 'macet', 'berhenti', 'tidak berfungsi', 'tidak bisa', 'gagal', 'force close', 'fc', 'loading']
+    
+    # Cek kategori berdasarkan kata kunci
+    if any(keyword in text for keyword in login_keywords):
+        return 'Login'
+    elif any(keyword in text for keyword in ui_keywords):
+        return 'UI/UX'
+    elif any(keyword in text for keyword in bug_keywords):
+        return 'Bug'
+    else:
+        return 'Lainnya'
+
 # Fungsi preprocessing dari data_clean.py
 def initialize_preprocessing():
     # Stopwords Bahasa Indonesia
@@ -220,6 +239,10 @@ if auth.is_authenticated():
         try:
             df_hasil = pd.read_csv("hasil_labeling_stemming (4).csv")
             
+            # Tambahkan kategori masalah ke dataframe
+            if 'kategori_masalah' not in df_hasil.columns:
+                df_hasil['kategori_masalah'] = df_hasil['content'].apply(identify_issue_category)
+            
             # Tampilkan statistik
             col1, col2, col3, col4 = st.columns(4)
             
@@ -248,6 +271,85 @@ if auth.is_authenticated():
             ax.set_xlabel('Sentimen')
             ax.set_ylabel('Jumlah Ulasan')
             st.pyplot(fig)
+            
+            # Tambahkan analisis distribusi sentimen per kategori masalah
+            st.subheader("Distribusi Sentimen per Kategori Masalah")
+            
+            # Hitung jumlah untuk setiap kombinasi kategori dan sentimen
+            kategori_sentimen = pd.crosstab(df_hasil['kategori_masalah'], df_hasil['label'])
+            
+            # Hitung persentase
+            kategori_sentimen_pct = kategori_sentimen.div(kategori_sentimen.sum(axis=1), axis=0) * 100
+            
+            # Tampilkan tabel persentase
+            st.write("Persentase Sentimen per Kategori:")
+            st.dataframe(kategori_sentimen_pct.round(1), use_container_width=True)
+            
+            # Visualisasi dengan stacked bar chart
+            fig, ax = plt.subplots(figsize=(12, 6))
+            kategori_sentimen_pct.plot(kind='bar', stacked=True, 
+                                      color=['red', 'gray', 'green'], 
+                                      ax=ax)
+            ax.set_xlabel('Kategori Masalah')
+            ax.set_ylabel('Persentase (%)')
+            ax.set_title('Distribusi Sentimen per Kategori Masalah')
+            ax.legend(title='Sentimen')
+            
+            # Tambahkan label persentase
+            for c in ax.containers:
+                labels = [f'{v:.1f}%' if v > 0 else '' for v in c.datavalues]
+                ax.bar_label(c, labels=labels, label_type='center')
+                
+            st.pyplot(fig)
+            
+            # Tambahkan visualisasi jumlah ulasan per kategori
+            st.subheader("Jumlah Ulasan per Kategori Masalah")
+            kategori_counts = df_hasil['kategori_masalah'].value_counts()
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            kategori_counts.plot(kind='bar', color='skyblue', ax=ax)
+            ax.set_xlabel('Kategori Masalah')
+            ax.set_ylabel('Jumlah Ulasan')
+            
+            # Tambahkan label jumlah
+            for i, v in enumerate(kategori_counts):
+                ax.text(i, v + 0.5, str(v), ha='center')
+                
+            st.pyplot(fig)
+            
+            # Tampilkan data ulasan per kategori masalah
+            st.subheader("Data Ulasan per Kategori Masalah")
+            
+            # Buat tab untuk setiap kategori masalah
+            kategori_tabs = st.tabs(sorted(df_hasil['kategori_masalah'].unique()))
+            
+            # Isi setiap tab dengan data ulasan untuk kategori tersebut
+            for i, kategori in enumerate(sorted(df_hasil['kategori_masalah'].unique())):
+                with kategori_tabs[i]:
+                    # Filter data berdasarkan kategori
+                    kategori_df = df_hasil[df_hasil['kategori_masalah'] == kategori]
+                    
+                    # Tampilkan ringkasan sentimen untuk kategori ini
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        positif_kat = len(kategori_df[kategori_df['label'] == 'positif'])
+                        st.metric(f"Positif", positif_kat, f"{positif_kat/len(kategori_df):.1%}")
+                    with col2:
+                        netral_kat = len(kategori_df[kategori_df['label'] == 'netral'])
+                        st.metric(f"Netral", netral_kat, f"{netral_kat/len(kategori_df):.1%}")
+                    with col3:
+                        negatif_kat = len(kategori_df[kategori_df['label'] == 'negatif'])
+                        st.metric(f"Negatif", negatif_kat, f"{negatif_kat/len(kategori_df):.1%}")
+                    
+                    # Tampilkan data ulasan untuk kategori ini
+                    st.write(f"Data Ulasan Kategori: {kategori}")
+                    
+                    # Pilih kolom yang ingin ditampilkan
+                    columns_to_display = ['content', 'label', 'confidence']
+                    if all(col in kategori_df.columns for col in columns_to_display):
+                        st.dataframe(kategori_df[columns_to_display], use_container_width=True)
+                    else:
+                        st.dataframe(kategori_df, use_container_width=True)
             
         except Exception as e:
             st.error(f"Error loading data: {e}")
